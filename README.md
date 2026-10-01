@@ -1,8 +1,6 @@
 # Real-Time Fraud Detection System
 
-DISCLAIMER
-
-Сервис подготовлен в демонстрационных целях для студентов курса МТС ШАД 2025 в рамках занятий по MLOps. Датасеты предоставлены в рамках соревнования https://www.kaggle.com/competitions/teta-ml-1-2025
+Учебный по MLOps. Датасеты предоставлены в рамках соревнования https://www.kaggle.com/competitions/teta-ml-1-2025
 
 Система для обнаружения мошеннических транзакций в реальном времени с использованием ML-модели и Kafka для потоковой обработки данных.
 
@@ -29,7 +27,16 @@ DISCLAIMER
 3. **Kafka Infrastructure**:
    - Zookeeper + Kafka брокер
    - `kafka-setup`: автоматически создает топики `transactions` и `scoring`
-   - Kafka UI: веб-интерфейс для мониторинга сообщений (порт 8080)
+    - Kafka UI: веб-интерфейс для мониторинга сообщений (порт 8080)
+
+4. **`db_writer` и PostgreSQL**:
+   - `db_writer` читает результаты из топика `scoring` и сохраняет их в PostgreSQL.
+   - PostgreSQL хранит витрину `transaction_scores` в именованном Docker volume.
+   - Streamlit показывает последние мошеннические операции и гистограмму последних скоров.
+
+5. **`train`**:
+   - Простенькое обучение с помощью CatBoost.
+   - Сохраняет модель в общий volume. `fraud_detector` использует её при старте.
 
 ## 🚀 Быстрый старт
 
@@ -45,12 +52,29 @@ cd fraud-detection-system
 # Сборка и запуск всех сервисов
 docker-compose up --build
 ```
+Обучение не будет запускаться, так как для него задан профиль в docker-compose.yaml. 
+
+Для первого запуска используется уже включенная в образ модель. Чтобы потренироваться в обучении и создать/обновить модель самостоятельно, выполните:
+
+```bash
+docker compose --profile training run --build --rm train
+```
+
+По умолчанию обучение использует 300 итераций. Значение настраивается переменной `TRAIN_ITERATIONS`. После обучения перезапустите обработчик, чтобы он загрузил новую модель:
+
+```bash
+docker compose restart fraud_detector
+```
+
 После запуска:
 - **Streamlit UI**: http://localhost:8501
 - **Kafka UI**: http://localhost:8080
 - **Логи сервисов**: 
   ```bash
   docker-compose logs <service_name>  # Например: fraud_detector, kafka, interface
+  ```
+
+Результаты доступны в интерфейсе Streamlit в разделе «Результаты скоринга». Для сброса удалите volumes командой `docker compose down -v`.
 
 ## 🛠️ Использование
 
@@ -70,25 +94,30 @@ docker-compose up --build
 
 ### 3. Результаты:
 
- - Скоринговые оценки пишутся в топик scoring в формате:
-    ```json
-    {
-    "score": 0.995, 
-    "fraud_flag": 1, 
-    "transaction_id": "d6b0f7a0-8e1a-4a3c-9b2d-5c8f9d1e2f3a"
-    }
+  - Скоринговые оценки пишутся в топик `scoring` и сохраняются в PostgreSQL в формате:
+     ```json
+     {
+     "transaction_id": "d6b0f7a0-8e1a-4a3c-9b2d-5c8f9d1e2f3a",
+     "score": 0.995,
+     "fraud_flag": 1
+     }
     ```
 ## Структура проекта
 ```
 .
 ├── fraud_detector/
-│   ├── preprocessing.py    # Логика препроцессинга
-│   ├── scorer.py           # ML-модель и предсказания
-│   ├── app.py              # Kafka Consumer/Producer
+│   ├── src/
+│   │   ├── preprocessing.py # Логика препроцессинга
+│   │   └── scorer.py        # Загрузка модели и предсказания
+│   ├── app/app.py           # Kafka Consumer/Producer
+│   ├── train.py             # Обучение модели
 │   └── Dockerfile
+├── db_writer/               # Kafka → PostgreSQL
+│   └── app.py
 ├── interface/
 │   └── app.py              # Streamlit UI
 ├── docker-compose.yaml
+├── ARCHITECTURE.md
 └── README.md
 ```
 
@@ -104,7 +133,4 @@ docker-compose up --build
 
 *Примечание:* 
 
-Для полной функциональности убедитесь, что:
-1. Модель `my_catboost.cbm` размещена в `fraud_detector/models/`
-2. Тренировочные данные находятся в `fraud_detector/train_data/`
-3. Порты 8080, 8501 и 9095 свободны на хосте
+Для первого запуска в образ включена модель `fraud_detector/models/my_catboost.cbm`. Обучение использует `fraud_detector/train_data/train.csv`. Порты 8080, 8501 и 9095 должны быть свободны на хосте.

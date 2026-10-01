@@ -4,14 +4,14 @@ import pandas as pd
 import time
 import logging
 import json
-from datetime import datetime
 
 from confluent_kafka import Consumer, Producer, KafkaError
 
 sys.path.append(os.path.abspath('./src'))
 from preprocessing import load_train_data, run_preproc
-from scorer import make_pred
+from scorer import load_model, make_pred
 
+os.makedirs('/app/logs', exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -44,6 +44,7 @@ class ProcessingService:
         
         # Загрузка данных для препроцессинга
         self.train = load_train_data()
+        self.model = load_model()
 
     def process_messages(self):
         while True:
@@ -63,15 +64,20 @@ class ProcessingService:
 
                 # Препроцессинг и предсказание
                 processed_df = run_preproc(self.train, input_df)
-                submission = make_pred(processed_df, "kafka_stream")
+                submission = make_pred(processed_df, self.model, "kafka_stream")
 
                 # Добавляем ID в результат
-                submission['transaction_id'] = transaction_id
-
                 # Отправка результата в топик scoring
+                prediction = submission.iloc[0]
+                result = {
+                    'transaction_id': transaction_id,
+                    'score': float(prediction['score']),
+                    'fraud_flag': int(prediction['fraud_flag']),
+                }
                 self.producer.produce(
-                    'scoring',
-                    value=submission.to_json(orient='records')
+                    SCORING_TOPIC,
+                    key=transaction_id.encode('utf-8'),
+                    value=json.dumps(result).encode('utf-8')
                 )
                 self.producer.flush()
             except Exception as e:
@@ -85,3 +91,5 @@ if __name__ == "__main__":
         service.process_messages()
     except KeyboardInterrupt:
         logger.info('Service stopped by user')
+    finally:
+        service.consumer.close()

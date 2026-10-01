@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import logging
 from catboost import CatBoostClassifier
@@ -5,20 +6,25 @@ from catboost import CatBoostClassifier
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
-logger.info('Importing pretrained model...')
-
-# Import model
-model = CatBoostClassifier()
-model.load_model('./models/my_catboost.cbm')
-
 # Define optimal threshold
-model_th = 0.98
-logger.info('Pretrained model imported successfully...')
+MODEL_PATH = os.getenv('MODEL_PATH', './models/my_catboost.cbm')
+MODEL_THRESHOLD = float(os.getenv('MODEL_THRESHOLD', '0.98'))
 
 
-def make_pred(dt, source_info="kafka"):
+def load_model(model_path=MODEL_PATH):
+    if not os.path.exists(model_path):
+        bundled_model = '/app/models/my_catboost.cbm'
+        if os.path.exists(bundled_model):
+            logger.info('Shared model not found; using bundled model %s', bundled_model)
+            model_path = bundled_model
+    logger.info('Loading model from %s', model_path)
+    model = CatBoostClassifier(task_type='CPU', thread_count=1, verbose=False)
+    model.load_model(model_path)
+    logger.info('Model loaded successfully')
+    return model
 
-    print(dt.dtypes)
+
+def make_pred(dt, model, source_info="kafka"):
 
     # Меняем формат категориальных фичей на string перед скорингом
     expected_categorical = ['hour',
@@ -37,9 +43,10 @@ def make_pred(dt, source_info="kafka"):
             dt[col] = dt[col].astype(str)
 
     # Calculate score
+    scores = model.predict_proba(dt)[:, 1]
     submission = pd.DataFrame({
-        'score':  model.predict_proba(dt)[:, 1],
-        'fraud_flag': (model.predict_proba(dt)[:, 1] > model_th) * 1
+        'score': scores,
+        'fraud_flag': (scores > MODEL_THRESHOLD).astype(int)
     })
     logger.info(f'Prediction complete for data from {source_info}')
 

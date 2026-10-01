@@ -1,7 +1,7 @@
 services:
   # Zookeeper (обязательный для Kafka)
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.0
+    image: confluentinc/cp-zookeeper:7.3.10
     networks:
       - ml-scorer
     environment:
@@ -12,7 +12,7 @@ services:
 
   # Сервис Kafka
   kafka:
-    image: confluentinc/cp-kafka:7.3.0
+    image: confluentinc/cp-kafka:7.3.10
     depends_on:
       - zookeeper
     networks:
@@ -35,7 +35,7 @@ services:
 
   # Сервис для создания топиков при старте
   kafka-setup:
-    image: confluentinc/cp-kafka:7.3.0
+    image: confluentinc/cp-kafka:7.3.10
     depends_on:
       kafka:
         condition: service_healthy  # Ждем пока Kafka станет здоровой
@@ -72,6 +72,22 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
 
+  postgres:
+    image: postgres:16-alpine
+    networks:
+      - ml-scorer
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fraud} -d ${POSTGRES_DB:-fraud}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   fraud_detector:
     build: ./fraud_detector
     networks:
@@ -80,9 +96,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       KAFKA_TRANSACTIONS_TOPIC: "transactions"
       KAFKA_SCORING_TOPIC: "scoring"
+      MODEL_PATH: /models/my_catboost.cbm
+      MODEL_THRESHOLD: "0.98"
+      TRAIN_DATA_PATH: /app/train_data/train.csv
+    volumes:
+      - model-data:/models
     depends_on:
-      - kafka
-      - kafka-setup
+      kafka-setup:
+        condition: service_completed_successfully
 
   interface:
     build: ./interface
@@ -91,12 +112,56 @@ services:
     environment:
       KAFKA_BROKERS: "kafka:9092"  # Используем внутренний адрес Kafka
       KAFKA_TOPIC: "transactions"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     ports:
       - "8501:8501"
+
+  db_writer:
+    build: ./db_writer
+    networks:
+      - ml-scorer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SCORING_TOPIC: scoring
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-fraud}
+      POSTGRES_USER: ${POSTGRES_USER:-fraud}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fraud}
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  train:
+    build: ./fraud_detector
+    command: ["python", "train.py"]
+    profiles: ["training"]
+    networks:
+      - ml-scorer
+    environment:
+      TRAIN_DATA_PATH: /app/train_data/train.csv
+      TRAIN_ITERATIONS: ${TRAIN_ITERATIONS:-300}
+      MODEL_PATH: /models/my_catboost.cbm
+    volumes:
+      - model-data:/models
 
 networks:
   ml-scorer:
     name: ml-scorer
     driver: bridge
+
+volumes:
+  postgres-data:
+  model-data:

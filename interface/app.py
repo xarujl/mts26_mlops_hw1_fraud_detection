@@ -5,11 +5,21 @@ import json
 import time
 import os
 import uuid
+import psycopg2
+import plotly.express as px
 
 # Конфигурация Kafka
 KAFKA_CONFIG = {
     "bootstrap_servers": os.getenv("KAFKA_BROKERS", "kafka:9092"),
     "topic": os.getenv("KAFKA_TOPIC", "transactions")
+}
+
+POSTGRES_CONFIG = {
+    "host": os.getenv("POSTGRES_HOST", "postgres"),
+    "port": int(os.getenv("POSTGRES_PORT", "5432")),
+    "dbname": os.getenv("POSTGRES_DB", "fraud"),
+    "user": os.getenv("POSTGRES_USER", "fraud"),
+    "password": os.getenv("POSTGRES_PASSWORD", "fraud"),
 }
 
 def load_file(uploaded_file):
@@ -100,3 +110,45 @@ if st.session_state.uploaded_files:
                             st.rerun()
                 else:
                     st.error("Файл не содержит данных")
+
+st.divider()
+st.title("📊 Результаты скоринга")
+if st.button("Посмотреть результаты"):
+    try:
+        with psycopg2.connect(**POSTGRES_CONFIG) as connection:
+            frauds = pd.read_sql_query(
+                """SELECT transaction_id, score, fraud_flag, created_at
+                   FROM transaction_scores
+                   WHERE fraud_flag = 1
+                   ORDER BY created_at DESC
+                   LIMIT 10""",
+                connection,
+            )
+            recent_scores = pd.read_sql_query(
+                """SELECT score FROM transaction_scores
+                   ORDER BY created_at DESC
+                   LIMIT 100""",
+                connection,
+            )
+
+        st.subheader("Последние мошеннические транзакции")
+        if frauds.empty:
+            st.info("Мошеннических транзакций пока нет.")
+        else:
+            st.dataframe(frauds, use_container_width=True, hide_index=True)
+
+        st.subheader("Распределение скоров последних транзакций")
+        if recent_scores.empty:
+            st.info("В базе пока нет результатов скоринга.")
+        else:
+            fig = px.histogram(
+                recent_scores,
+                x="score",
+                nbins=20,
+                title=f"Последние {len(recent_scores)} транзакций",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    except psycopg2.OperationalError as exc:
+        st.error(f"Не удалось подключиться к PostgreSQL: {exc}")
+    except Exception as exc:
+        st.error(f"Не удалось загрузить результаты: {exc}")

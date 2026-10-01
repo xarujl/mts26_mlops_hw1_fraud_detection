@@ -2,9 +2,9 @@
 import pandas as pd
 import numpy as np
 import logging
+import os
 
 # Import extra modules
-from geopy.distance import great_circle
 from sklearn.impute import SimpleImputer 
 
 logger = logging.getLogger(__name__)
@@ -36,15 +36,17 @@ def cat_encode(train, input_df, col):
 
 
 def add_distance_features(df):
-    
     logger.debug('Calculating distances...')
-    df['distance'] = df.apply(
-        lambda x: great_circle(
-            (x['lat'], x['lon']), 
-            (x['merchant_lat'], x['merchant_lon'])
-        ).km,
-        axis=1
-    )
+    # Vectorized great-circle (haversine) distance is equivalent for this use
+    # case and keeps preprocessing practical on a training dataset.
+    lat1 = np.radians(pd.to_numeric(df['lat'], errors='coerce'))
+    lon1 = np.radians(pd.to_numeric(df['lon'], errors='coerce'))
+    lat2 = np.radians(pd.to_numeric(df['merchant_lat'], errors='coerce'))
+    lon2 = np.radians(pd.to_numeric(df['merchant_lon'], errors='coerce'))
+    delta_lat = lat2 - lat1
+    delta_lon = lon2 - lon1
+    haversine = np.sin(delta_lat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(delta_lon / 2) ** 2
+    df['distance'] = 6371.0088 * 2 * np.arcsin(np.sqrt(np.clip(haversine, 0, 1)))
     return df.drop(columns=['lat', 'lon', 'merchant_lat', 'merchant_lon'])
 
 
@@ -59,7 +61,8 @@ def load_train_data():
     n_cats = 50
 
     # Import Train dataset
-    train = pd.read_csv('./train_data/train.csv').drop(columns=['name_1', 'name_2', 'street', 'post_code'])
+    train = pd.read_csv(os.getenv('TRAIN_DATA_PATH', './train_data/train.csv'),)
+    train = train.drop(columns=['name_1', 'name_2', 'street', 'post_code'], errors='ignore')
     logger.info('Raw train data imported. Shape: %s', train.shape)
 
     # Add some simple time features

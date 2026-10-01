@@ -19,6 +19,8 @@ numpy==2.0.2
 openpyxl==3.1.5
 packaging==24.2
 pandas==2.2.3
+plotly==6.1.1
+psycopg2-binary==2.9.10
 pillow==11.2.1
 protobuf==6.30.2
 pyarrow==20.0.0
